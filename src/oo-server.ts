@@ -1,23 +1,24 @@
-import * as assert from 'assert';
-import { IncomingHttpHeaders, IncomingMessage } from 'http';
-import * as process from 'process';
-import * as restify from 'restify';
-import * as websocket from 'websocket';
 
-function nothrow(x: Promise<any>) {
+import { isWebSocketCloseEvent, WebSocket } from "std/ws/mod.ts";
+import { Application, Request } from 'oak';
+import { assert } from "std/testing/asserts.ts";
+
+// deno-lint-ignore no-explicit-any
+export function nothrow(x: Promise<any>) {
     x.catch((e) => {
         console.error('failed nonthrow promise');
         console.error(e);
-        process.abort();
+        Deno.exit(1);
     });
 }
+// deno-lint-ignore no-explicit-any
 function nothrowf(x: () => Promise<any>) {
     nothrow(x());
 }
 
 export interface IRequest {
     path: string[];
-    headers: IncomingHttpHeaders;
+    headers: Headers;
 }
 
 export interface IMessageHandlerOutput {
@@ -27,9 +28,9 @@ export interface IMessageHandlerOutput {
 }
 export interface IMessageHandler {
     resultType: 'message-handler';
-    start(out: IMessageHandlerOutput);
+    start(out: WebSocket): void;
     msg(msg: string): Promise<void>;
-    closed(reason: number, message: string): Promise<void>;
+    closed(reason: number, message?: string): Promise<void>;
 }
 
 interface IWebsocketExtra {
@@ -37,98 +38,97 @@ interface IWebsocketExtra {
 }
 
 export class OoServer {
-    public setup(s: restify.Server): void {
-        s.use(restify.plugins.bodyParser());
-        s.use(restify.plugins.queryParser());
-        s.get('.*', this.handle.bind(this));
-        s.put('.*', this.handle.bind(this));
-        s.post('.*', this.handle.bind(this));
-        s.del('.*', this.handle.bind(this));
-        const ws = new websocket.server({httpServer: s});
-        ws.on('request', this.handleWs.bind(this));
-    }
-
-    public handle(req: restify.Request, res: restify.Response, next: restify.Next) {
-        nothrowf(async () => {
+    public setup(app: Application): void {
+        app.use(async (ctx) => {
             try {
-                const r = await this.findRoute(req, req.method, req.body || req.query);
-                if (r === null) {
-                    return res.send(404);
+                if (ctx.request.headers.get('connection')) {
+                    await ctx.upgrade();
+                    // deno-lint-ignore no-explicit-any
+                    (ctx.request.serverRequest as any).done.resolve(new Error('force untrack'));
                 }
 
-                res.send(r);
-            } catch (e) {
-                console.error(e);
-                res.send(e);
-            } finally {
-                next();
-            }
-        });
-    }
-
-    public async handleWs(req: websocket.request) {
-        nothrowf(async () => {
-            let conn: websocket.connection&IWebsocketExtra = null;
-            try {
-                const r = await this.findRoute(req.httpRequest, 'ws') as IMessageHandler;
+                const r = await this.findRoute(ctx.request, ctx.socket, ctx.request.url.pathname);
                 if (r === null) {
-                    return req.reject(404);
+                    // 404
+                    assert(false);
                 }
 
-                assert.equal(r.resultType, 'message-handler');
-                conn = req.accept() as (websocket.connection&IWebsocketExtra);
-                conn.handler = r;
-                conn.handler.start({
-                    close: async (error, reason) => {
-                        if (error) {
-                            conn.drop(error, reason);
-                        } else {
-                            conn.close();
+                const socket = ctx.socket;
+                if (socket) {
+                    assert(r.resultType === 'message-handler');
+                    const handler = r as IMessageHandler;
+                    nothrowf(async () => {
+                        let clientClosed = false;
+                        for await (const evt of socket) {
+                            if (typeof evt === 'string') {
+                                await handler.msg(evt);
+                            } else if (isWebSocketCloseEvent(evt)) {
+                                clientClosed = true;
+                                await handler.closed(evt.code, evt.reason);
+                            }
                         }
-                    },
-                    ping: async (data: string) => {
-                        conn.ping(data);
-                    },
-                    sendMsg: async (msg) => {
-                        conn.sendUTF(msg);
-                    },
-                });
-                conn.on('message', (data) => nothrowf(async () => {
-                    await conn.handler.msg(data.utf8Data);
-                }));
-                conn.on('close', (a1, a2) => nothrowf(async () => {
-                    await conn.handler.closed(a1, a2);
-                }));
+
+                        if (!clientClosed) {
+                            await handler.closed(0);
+                        }
+                    });
+
+                    handler.start(socket);
+                    return;
+                }
+
+
+                ctx.response.status = 200;
+                ctx.response.body = JSON.stringify(r);
+                ctx.response.type = 'application/json';
             } catch (e) {
                 console.error(e);
-                if (conn !== null) {
-                    conn.drop(500, JSON.stringify(e));
-                } else {
-                    req.reject(500, JSON.stringify(e));
-                }
+                // Error
+                assert(false);
             }
         });
     }
 
-    public async findRoute(req: IncomingMessage, method: string, body?: any) {
-        let url = req.url.split('?', 1)[0].split('/').filter((x) => x.length > 0);
+    // deno-lint-ignore no-explicit-any
+    public async findRoute(req: Request, socket: WebSocket | undefined, urlStr: string): Promise<any | null> {
+        const reqSimple: IRequest = {
+            path: urlStr.split('?', 1)[0].split('/').filter((x) => x.length > 0),
+            headers: req.headers,
+        };
 
-        if (url.length === 0) {
-            url = [''];
+        const method = socket ? 'ws' : req.method.toLowerCase();
+
+        if (reqSimple.path.length === 0) {
+            reqSimple.path = [''];
         }
 
-        const reqPub: IRequest = {path: url.slice(1), headers: req.headers};
+        // deno-lint-ignore no-explicit-any
+        const router = this as any;
 
-        const route = this[method.toLowerCase() + '_' + url[0]] || this['any_' + url[0]];
+        const route = router[method + '_' + reqSimple.path[0]] || router['any_' + reqSimple.path[0]];
         if (route) {
-            const x = await Promise.resolve().then(() => route.apply(this, [body, reqPub]));
+            reqSimple.path.shift();
+            const body = req.hasBody
+                ? await req.body().value
+                : this.query(req.url.searchParams);
+            const x = await Promise.resolve().then(() => route.apply(this, [body, reqSimple]));
+
             if (x instanceof OoServer) {
-                req.url = '/' + reqPub.path.join('/');
-                return x.findRoute(req, method);
+                const urlStr2 = '/' + reqSimple.path.join('/');
+                return x.findRoute(req, socket, urlStr2);
             }
+
             return x;
         } else {
             return null;
         }
+    }
+
+    private query(search: URLSearchParams): Record<string, string> {
+        const r: Record<string, string> = {};
+        for (const each of search) {
+            r[each[0]] = each[1];
+        }
+        return r;
     }
 }

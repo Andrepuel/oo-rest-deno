@@ -1,0 +1,3 @@
+scripts:
+  test: deno test --allow-net --import-map=import_map.json --unstable
+  debug: vr test --inspect-brk
