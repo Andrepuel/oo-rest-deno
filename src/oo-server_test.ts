@@ -1,3 +1,4 @@
+// deno-lint-ignore-file
 import { assert, assertEquals } from 'std/testing/asserts.ts';
 import { IMessageHandler, IRequest, OoServer, nothrow } from './oo-server.ts';
 import { Application, send } from 'oak';
@@ -10,17 +11,18 @@ function tick(): Promise<void> {
 class Requester {
     constructor(private readonly port: number) {}
 
-    // deno-lint-ignore no-explicit-any
-    public async request(path: string, method: 'GET'|'PUT' = 'GET', sendBody: any | undefined = undefined): Promise<{response: Response, body: any}> {
-        const response = await fetch(`http://127.0.0.1:${this.port}/${path}`,
-            {
-                method,
-                headers: {
-                    'content-type': 'application/json',
-                },
-                body: sendBody ? JSON.stringify(sendBody) : undefined,
-            }
-        );
+    public async request(
+        path: string,
+        method: 'GET' | 'PUT' = 'GET',
+        sendBody: any | undefined = undefined,
+    ): Promise<{ response: Response; body: any }> {
+        const response = await fetch(`http://127.0.0.1:${this.port}/${path}`, {
+            method,
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: sendBody ? JSON.stringify(sendBody) : undefined,
+        });
 
         const encoder = new TextDecoder('utf8');
         const blob = await response.blob();
@@ -28,14 +30,17 @@ class Requester {
 
         try {
             assertEquals(response.status, 200);
-            assertEquals(response.headers.get('content-type'), 'application/json; charset=utf-8');
+            assertEquals(
+                response.headers.get('content-type'),
+                'application/json; charset=utf-8',
+            );
             const body = JSON.parse(text);
 
             return {
                 response,
                 body,
-            }
-        } catch(e) {
+            };
+        } catch (e) {
             throw new Error("Can't parse JSON " + [text]);
         }
     }
@@ -140,7 +145,7 @@ class HopServer extends OoServer {
 
 await suite('OoServer', async (ctx) => {
     const rest = new TestServer();
-    const port = Math.floor(Math.random() * (2**16 - 1024)) + 1024;
+    const port = Math.floor(Math.random() * (2 ** 16 - 1024)) + 1024;
     const controller = new AbortController();
     const app = await ctx.later(async () => {
         await Promise.resolve();
@@ -163,7 +168,7 @@ await suite('OoServer', async (ctx) => {
     });
 
     const listeningPromise = ctx.later(async () => {
-        await app.listen({port, signal: controller.signal});
+        await app.listen({ port, signal: controller.signal });
     });
 
     const client = await clientPromise;
@@ -178,46 +183,49 @@ await suite('OoServer', async (ctx) => {
         assertEquals(result.body, 'sub');
     });
 
-    await ctx.test('should receive and send messages on websocket', async () => {
-        const received = new Array<string>();
-        let closed = false;
-        let sendMsg: (msg: string) => Promise<void> = null!;
+    await ctx.test(
+        'should receive and send messages on websocket',
+        async () => {
+            const received = new Array<string>();
+            let closed = false;
+            let sendMsg: (msg: string) => Promise<void> = null!;
 
-        rest.handler = {
-            closed: async () => {
-                closed = true;
-                await Promise.resolve();
-            },
-            msg: async (msg: string) => {
-                received.push(msg);
-                await Promise.resolve();
-            },
-            resultType: 'message-handler',
-            start: async (out) => {
-                sendMsg = out.send.bind(out);
-                await Promise.resolve();
-            },
-        };
-        const ws = await client.connect('/listen');
-        assertEquals(received.length, 0);
-        ws.send('hello world');
-        await tick();
-        assertEquals(received.length, 1);
-        assertEquals(received[0], 'hello world');
+            rest.handler = {
+                closed: async () => {
+                    closed = true;
+                    await Promise.resolve();
+                },
+                msg: async (msg: string) => {
+                    received.push(msg);
+                    await Promise.resolve();
+                },
+                resultType: 'message-handler',
+                start: async (out) => {
+                    sendMsg = out.send.bind(out);
+                    await Promise.resolve();
+                },
+            };
+            const ws = await client.connect('/listen');
+            assertEquals(received.length, 0);
+            ws.send('hello world');
+            await tick();
+            assertEquals(received.length, 1);
+            assertEquals(received[0], 'hello world');
 
-        let recvMsg = '';
-        ws.onmessage = (msg) => {
-            recvMsg = msg.data;
-        }
-        await sendMsg('Hello world!');
-        await tick();
-        assertEquals(recvMsg, 'Hello world!');
+            let recvMsg = '';
+            ws.onmessage = (msg) => {
+                recvMsg = msg.data;
+            };
+            await sendMsg('Hello world!');
+            await tick();
+            assertEquals(recvMsg, 'Hello world!');
 
-        assertEquals(closed, false);
-        ws.close();
-        await tick();
-        assertEquals(closed, true);
-    });
+            assertEquals(closed, false);
+            ws.close();
+            await tick();
+            assertEquals(closed, true);
+        },
+    );
 
     // await ctx.test('should be able to closed the socket', async () => {
     //     let closed = false;
@@ -238,7 +246,7 @@ await suite('OoServer', async (ctx) => {
     //     };
 
     //     const ws = await client.connect('/listen');
-    //     ws.onclose = () => clientClosed = true;
+    //     ws.onclose = () => (clientClosed = true);
     //     await tick();
     //     assertEquals(clientClosed, false);
     //     await close!();
@@ -247,45 +255,51 @@ await suite('OoServer', async (ctx) => {
     //     assertEquals(closed, true);
     // });
 
-    // await ctx.test('should be able to close the websocket with error', async () => {
-    //     let closed = false;
-    //     let clientClosed = false;
-    //     let close: (error?: number, description?: string) => Promise<void>;
+    // await ctx.test(
+    //     'should be able to close the websocket with error',
+    //     async () => {
+    //         let closed = false;
+    //         let clientClosed = false;
+    //         let close: (error?: number, description?: string) => Promise<void>;
 
-    //     rest.handler = {
-    //         closed: async () => {
-    //             closed = true;
-    //             await Promise.resolve();
-    //         },
-    //         msg: null!,
-    //         resultType: 'message-handler',
-    //         start: async (out) => {
-    //             close = out.close.bind(out);
-    //             await Promise.resolve();
-    //         },
-    //     };
+    //         rest.handler = {
+    //             closed: async () => {
+    //                 closed = true;
+    //                 await Promise.resolve();
+    //             },
+    //             msg: null!,
+    //             resultType: 'message-handler',
+    //             start: async (out) => {
+    //                 close = out.close.bind(out);
+    //                 await Promise.resolve();
+    //             },
+    //         };
 
-    //     const ws = await client.connect('/listen');
-    //     ws.onclose = (evt) => {
-    //         assertEquals(evt.code, 500);
-    //         assertEquals(evt.reason, 'hello world!');
-    //         clientClosed = true;
-    //     };
-    //     await tick();
-    //     assertEquals(clientClosed, false);
-    //     await close!(500, 'hello world!');
-    //     await tick();
-    //     assertEquals(clientClosed, true);
-    // });
+    //         const ws = await client.connect('/listen');
+    //         ws.onclose = (evt) => {
+    //             assertEquals(evt.code, 500);
+    //             assertEquals(evt.reason, 'hello world!');
+    //             clientClosed = true;
+    //         };
+    //         await tick();
+    //         assertEquals(clientClosed, false);
+    //         await close!(500, 'hello world!');
+    //         await tick();
+    //         assertEquals(clientClosed, true);
+    //     },
+    // );
 
-    await ctx.test('should receive request body as first argument', async () => {
-        const ping: IPingPong = {ping: 'hello', pong: '2'};
-        const result = await client.request('/echo', 'PUT', ping);
-        const pong: IPingPong = result.body as IPingPong;
+    await ctx.test(
+        'should receive request body as first argument',
+        async () => {
+            const ping: IPingPong = { ping: 'hello', pong: '2' };
+            const result = await client.request('/echo', 'PUT', ping);
+            const pong: IPingPong = result.body as IPingPong;
 
-        assertEquals(pong.ping, 'hello');
-        assertEquals(pong.pong, '21');
-    });
+            assertEquals(pong.ping, 'hello');
+            assertEquals(pong.pong, '21');
+        },
+    );
 
     await ctx.test('should receive query as first argument', async () => {
         const result = await client.request('/echo?ping=hello&pong=3');
@@ -295,21 +309,24 @@ await suite('OoServer', async (ctx) => {
         assertEquals(pong.pong, '31');
     });
 
-    await ctx.test('should receive manipulable path as second argument', async () => {
-        const result = await client.request('hop/bola');
-        assertEquals(result.body, 'bola');
+    await ctx.test(
+        'should receive manipulable path as second argument',
+        async () => {
+            const result = await client.request('hop/bola');
+            assertEquals(result.body, 'bola');
 
-        const conn = await client.connect('hop/gato');
-        let messageReceived = false;
-        conn.onmessage = (message) => {
-            assert(!messageReceived);
-            assertEquals(message.data, 'gato');
-            messageReceived = true;
-            conn.close();
-        };
-        await new Promise((ok) => conn.onclose = ok);
-        assert(messageReceived);
-    });
+            const conn = await client.connect('hop/gato');
+            let messageReceived = false;
+            conn.onmessage = (message) => {
+                assert(!messageReceived);
+                assertEquals(message.data, 'gato');
+                messageReceived = true;
+                conn.close();
+            };
+            await new Promise((ok) => (conn.onclose = ok));
+            assert(messageReceived);
+        },
+    );
 
     await ctx.test('will receive the headers as well', async () => {
         const result = await client.request('/ct');

@@ -1,3 +1,7 @@
 scripts:
   test: deno test --allow-net --import-map=import_map.json --unstable
   debug: vr test --inspect-brk
+  lint: deno lint --unstable src/
+  # Deno fmt does not support options yet
+  fmt: prettier src/ --write
+  precommit: vr fmt && vr lint && vr test
