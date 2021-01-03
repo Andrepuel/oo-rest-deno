@@ -1,9 +1,0 @@
-{
-    "extends": "./node_modules/tslint/lib/configs/recommended",
-    "rules": {
-        "quotemark": [true, "single"],
-        "max-classes-per-file": false,
-        "no-console": false,
-        "no-floating-promises": true
-    }
-}
