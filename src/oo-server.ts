@@ -1,5 +1,5 @@
 import { isWebSocketCloseEvent, WebSocket } from 'std/ws/mod.ts';
-import { Application, Request } from 'oak';
+import { Application, Middleware, Request } from 'oak';
 import { assert } from 'std/testing/asserts.ts';
 
 // deno-lint-ignore no-explicit-any
@@ -15,7 +15,7 @@ function nothrowf(x: () => Promise<any>) {
     nothrow(x());
 }
 
-export interface IRequest {
+export interface PublicRequest {
     path: string[];
     headers: Headers;
 }
@@ -36,9 +36,38 @@ interface IWebsocketExtra {
     handler: IMessageHandler;
 }
 
-export class OoServer {
+type Opaque<T> = { __opaque: T; resultType: undefined };
+
+type RouteReturn<U> = U | IMessageHandler | Routes | null | undefined;
+export type Route<T, U> = (
+    body: T,
+    request: PublicRequest,
+) => RouteReturn<U> | Promise<RouteReturn<U>>;
+export type RoutesTyped = {
+    [route: string]: Route<Opaque<1>, Opaque<2>> | Opaque<3> | undefined;
+};
+export type Routes = { resultType: 'routes' };
+
+function routesTyped(routes: Routes): RoutesTyped {
+    // Anything may become routes type, actually.
+    // Because routes typed indexing operation returns
+    // undefined, an opaque value or a function.
+    // We only presuppose that if the given attribute
+    // is a function. Then it will be compatible with
+    // the routing function.
+    return (routes as unknown) as RoutesTyped;
+}
+
+export class OoServer implements Routes {
+    public readonly resultType = 'routes';
+
     public setup(app: Application): void {
-        app.use(async (ctx) => {
+        // deno-lint-ignore no-explicit-any
+        app.use(OoServer.middleware(this as any));
+    }
+
+    public static middleware(routes: Routes): Middleware {
+        return async (ctx) => {
             try {
                 if (ctx.request.headers.get('connection')) {
                     await ctx.upgrade();
@@ -48,12 +77,13 @@ export class OoServer {
                     );
                 }
 
-                const r = await this.findRoute(
+                const r = await OoServer.route(
+                    routes,
                     ctx.request,
+                    this.prepareRequest(ctx.request),
                     ctx.socket,
-                    ctx.request.url.pathname,
                 );
-                if (r === null) {
+                if (r === null || r === undefined) {
                     // 404
                     assert(false);
                 }
@@ -90,60 +120,72 @@ export class OoServer {
                 // Error
                 assert(false);
             }
-        });
+        };
     }
 
-    public async findRoute(
+    public static async route(
+        routesArg: Routes,
         req: Request,
+        pubReq: PublicRequest,
         socket: WebSocket | undefined,
-        urlStr: string,
-        // deno-lint-ignore no-explicit-any
-    ): Promise<any | null> {
-        const reqSimple: IRequest = {
-            path: urlStr
+    ): Promise<RouteReturn<Opaque<2>>> {
+        const routes = routesTyped(routesArg);
+        const method = socket ? 'ws' : req.method.toLowerCase();
+
+        if (pubReq.path.length === 0) {
+            pubReq.path = [''];
+        }
+
+        const route =
+            OoServer.methodName(pubReq, routes, method) ||
+            OoServer.methodName(pubReq, routes, 'any');
+
+        if (!route) {
+            return undefined;
+        }
+
+        pubReq.path.shift();
+        const body = req.hasBody
+            ? await req.body().value
+            : this.query(req.url.searchParams);
+
+        const result = await route(body, pubReq);
+
+        if (result && result.resultType === 'routes') {
+            return OoServer.route(result, req, pubReq, socket);
+        } else {
+            return result;
+        }
+    }
+
+    public static prepareRequest(req: Request): PublicRequest {
+        return {
+            path: req.url.pathname
                 .split('?', 1)[0]
                 .split('/')
                 .filter((x) => x.length > 0),
             headers: req.headers,
         };
-
-        const method = socket ? 'ws' : req.method.toLowerCase();
-
-        if (reqSimple.path.length === 0) {
-            reqSimple.path = [''];
-        }
-
-        // deno-lint-ignore no-explicit-any
-        const router = this as any;
-
-        const route =
-            router[method + '_' + reqSimple.path[0]] ||
-            router['any_' + reqSimple.path[0]];
-        if (route) {
-            reqSimple.path.shift();
-            const body = req.hasBody
-                ? await req.body().value
-                : this.query(req.url.searchParams);
-            const x = await Promise.resolve().then(() =>
-                route.apply(this, [body, reqSimple]),
-            );
-
-            if (x instanceof OoServer) {
-                const urlStr2 = '/' + reqSimple.path.join('/');
-                return x.findRoute(req, socket, urlStr2);
-            }
-
-            return x;
-        } else {
-            return null;
-        }
     }
 
-    private query(search: URLSearchParams): Record<string, string> {
+    private static query(search: URLSearchParams): Record<string, string> {
         const r: Record<string, string> = {};
         for (const each of search) {
             r[each[0]] = each[1];
         }
         return r;
+    }
+
+    private static methodName(
+        req: PublicRequest,
+        routes: RoutesTyped,
+        method: string,
+    ): Route<Opaque<1>, Opaque<2>> | undefined {
+        const route = routes[`${method}_${req.path[0]}`];
+        if (typeof route !== 'function') {
+            return undefined;
+        }
+
+        return route.bind(routes);
     }
 }

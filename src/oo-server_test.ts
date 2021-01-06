@@ -1,6 +1,11 @@
 // deno-lint-ignore-file
 import { assert, assertEquals } from 'std/testing/asserts.ts';
-import { IMessageHandler, IRequest, OoServer, nothrow } from './oo-server.ts';
+import {
+    IMessageHandler,
+    OoServer,
+    nothrow,
+    PublicRequest,
+} from './oo-server.ts';
 import { Application, send } from 'oak';
 import { suite } from 'testtree';
 
@@ -41,7 +46,7 @@ class Requester {
                 body,
             };
         } catch (e) {
-            throw new Error("Can't parse JSON " + [text]);
+            throw new Error("Can't parse JSON " + JSON.stringify([text]));
         }
     }
 
@@ -100,13 +105,13 @@ class TestServer extends OoServer {
         return obj;
     }
 
-    public async any_hop(_: unknown, path: IRequest) {
+    public async any_hop(_: unknown, path: PublicRequest) {
         await Promise.resolve();
         assert(path.path.length > 0);
         return new HopServer(path.path.shift()!);
     }
 
-    public async get_ct(_: unknown, req: IRequest): Promise<string> {
+    public async get_ct(_: unknown, req: PublicRequest): Promise<string> {
         await Promise.resolve();
         return req.headers.get('content-type')!;
     }
